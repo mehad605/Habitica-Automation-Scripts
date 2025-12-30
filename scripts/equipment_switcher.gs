@@ -67,7 +67,19 @@ function doPost(e) {
             return;
         }
 
-        const data = JSON.parse(e.postData.contents);
+        let data;
+        try {
+            data = JSON.parse(e.postData.contents);
+        } catch (parseError) {
+            logMessage += `Error: Could not read webhook data. This usually means Habitica sent invalid data.\n`;
+            logMessage += `Technical details: ${parseError.toString()}\n`;
+            sendLogEmail(logMessage);
+            return ContentService.createTextOutput(JSON.stringify({ 
+                status: 'error', 
+                message: 'Invalid webhook data' 
+            }));
+        }
+        
         logMessage += `Event Type: ${data.type}\n`;
 
         if (data.type === 'scored' && data.task && data.task.type === 'reward') {
@@ -106,14 +118,21 @@ function doPost(e) {
 function sendLogEmail(body) {
     if (!SEND_LOG_EMAIL) return;
 
-    const emailTo = EMAIL_ADDRESS || Session.getActiveUser().getEmail();
+    try {
+        const emailTo = EMAIL_ADDRESS || Session.getActiveUser().getEmail();
 
-    MailApp.sendEmail({
-        to: emailTo,
-        subject: "Habitica Script Log",
-        body: body
-    });
-    console.log("Email sent to " + emailTo);
+        MailApp.sendEmail({
+            to: emailTo,
+            subject: "Habitica Script Log",
+            body: body
+        });
+        console.log("Email sent to " + emailTo);
+    } catch (emailError) {
+        console.error("Failed to send email: " + emailError);
+        console.error("Email content was:");
+        console.error(body);
+        // At least they can check the execution log
+    }
 }
 
 // ==========================================
@@ -224,6 +243,77 @@ function verifyEquipment(slot, expectedKey) {
 // ==========================================
 // UTILITY FUNCTIONS
 // ==========================================
+
+/**
+ * Run this FIRST to validate your configuration
+ * Check the execution log for any errors
+ */
+function validateSetup() {
+    let errors = [];
+    let warnings = [];
+    
+    // Check credentials
+    if (!USER_ID || USER_ID === "") {
+        errors.push("❌ USER_ID is empty");
+    }
+    if (!API_TOKEN || API_TOKEN === "") {
+        errors.push("❌ API_TOKEN is empty");
+    }
+    if (!WEB_APP_URL || WEB_APP_URL === "") {
+        warnings.push("⚠️ WEB_APP_URL is empty (fill this after deployment)");
+    }
+    
+    // Check email settings
+    if (SEND_LOG_EMAIL && !EMAIL_ADDRESS) {
+        warnings.push("⚠️ Email logging enabled but no EMAIL_ADDRESS set (will use your Google account)");
+    }
+    
+    // Check equipment sets
+    if (Object.keys(EQUIPMENT_SETS).length === 0) {
+        errors.push("❌ EQUIPMENT_SETS is empty");
+    }
+    
+    // Test API connection if credentials exist
+    if (USER_ID && API_TOKEN) {
+        try {
+            const url = `${HABITICA_API_BASE}/user?userFields=_id`;
+            const params = {
+                headers: {
+                    'x-api-user': USER_ID,
+                    'x-api-key': API_TOKEN,
+                    'x-client': USER_ID + '-GasValidator'
+                },
+                muteHttpExceptions: true
+            };
+            const response = UrlFetchApp.fetch(url, params);
+            if (response.getResponseCode() === 200) {
+                console.log("✅ API credentials are valid!");
+            } else {
+                errors.push(`❌ API credentials invalid (Status: ${response.getResponseCode()})`);
+            }
+        } catch (e) {
+            errors.push(`❌ Could not connect to Habitica: ${e}`);
+        }
+    }
+    
+    // Print results
+    if (errors.length > 0) {
+        console.error("SETUP ERRORS - Fix these before continuing:");
+        errors.forEach(err => console.error(err));
+    }
+    
+    if (warnings.length > 0) {
+        console.warn("WARNINGS:");
+        warnings.forEach(warn => console.warn(warn));
+    }
+    
+    if (errors.length === 0) {
+        console.log("✅ Setup validation passed!");
+        if (warnings.length === 0) {
+            console.log("You're ready to deploy!");
+        }
+    }
+}
 
 function setupWebhook() {
     if (WEB_APP_URL.includes("/dev")) {
