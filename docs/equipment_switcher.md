@@ -70,7 +70,13 @@ For each build you want to create:
    }
    ```
 5. Paste this into the appropriate build in `EQUIPMENT_SETS` (e.g., "intelligence", "perception", etc.)
+![alt text](../images/image.png)
+In your case the values may be different based on what you equipped manually.
+
 6. Repeat for all your builds
+Mine looks something like this:
+![alt text](../images/image-1.png)
+Remember this may be different from yours because of what equipments you have or choose.
 
 ### 7. Connect Webhook
 

@@ -13,24 +13,40 @@ const EMAIL_ADDRESS = "";
 // Add more builds by adding new keys with their equipment
 const EQUIPMENT_SETS = {
     "intelligence": {
-        "weapon": "weapon_special_winter2026Mage",
-        "armor": "armor_special_winter2026Mage",
-        "head": "head_special_winter2026Mage"
+        "weapon": "weapon_special_mammothRiderSpear",
+        "armor": "armor_special_2",
+        "head": "head_special_2",
+        "shield": "shield_special_diamondStave",
+        "back": "back_special_aetherCloak",
+        "eyewear": "eyewear_special_aetherMask",
+        "body": "body_special_aetherAmulet"
     },
     "perception": {
-        "weapon": "",
-        "armor": "",
-        "head": ""
+        "weapon": "weapon_special_2",
+        "armor": "armor_armoire_woodElfArmor",
+        "head": "head_special_clandestineCowl",
+        "shield": "shield_special_goldenknight",
+        "back": "back_special_aetherCloak",
+        "eyewear": "eyewear_special_aetherMask",
+        "body": "body_special_aetherAmulet"
     },
     "constitution": {
-        "weapon": "",
-        "armor": "",
-        "head": ""
+        "weapon": "weapon_special_skeletonKey",
+        "armor": "armor_special_2",
+        "head": "head_special_roguishRainbowMessengerHood",
+        "shield": "shield_special_moonpearlShield",
+        "back": "back_special_aetherCloak",
+        "eyewear": "eyewear_special_aetherMask",
+        "body": "body_special_aetherAmulet"
     },
     "strength": {
-        "weapon": "",
-        "armor": "",
-        "head": ""
+        "weapon": "weapon_special_2",
+        "armor": "armor_special_finnedOceanicArmor",
+        "head": "head_special_2",
+        "shield": "shield_special_lootBag",
+        "back": "back_special_aetherCloak",
+        "eyewear": "eyewear_special_aetherMask",
+        "body": "body_special_aetherAmulet"
     }
 };
 
@@ -64,8 +80,8 @@ function doPost(e) {
 
                 if (rewardName === expectedRewardName) {
                     logMessage += `Match found: ${buildName}\n`;
-                    equipGearSafe(gearSet);
-                    logMessage += `Gear switch completed for ${buildName}\n`;
+                    const result = equipGearSafe(gearSet);
+                    logMessage += `Gear switch completed: ${result.success} successful, ${result.failed} failed\n`;
                     buildFound = true;
                     break;
                 }
@@ -105,8 +121,13 @@ function sendLogEmail(body) {
 // ==========================================
 
 function equipGearSafe(gearList) {
+    let logMessage = "EQUIPMENT CHANGE LOG\n\n";
+    let successCount = 0;
+    let failCount = 0;
+
     for (const [slot, key] of Object.entries(gearList)) {
         if (!key || key === 'shield_base_0') {
+            logMessage += `⊘ Skipped ${slot} (empty or base shield)\n`;
             console.log(`Skipping ${slot} (Key: ${key})`);
             continue;
         }
@@ -123,14 +144,80 @@ function equipGearSafe(gearList) {
             muteHttpExceptions: true
         };
 
-        const response = UrlFetchApp.fetch(specificUrl, params);
+        let retries = 0;
+        let success = false;
 
-        if (response.getResponseCode() === 200) {
-            console.log(`Success: Equipped ${key}`);
-        } else {
-            console.log(`Failed (${response.getResponseCode()}): ${key}`);
-            console.log(`Error: ${response.getContentText()}`);
+        while (retries < 3 && !success) {
+            const response = UrlFetchApp.fetch(specificUrl, params);
+
+            if (response.getResponseCode() === 200) {
+                Utilities.sleep(1000);
+
+                const verified = verifyEquipment(slot, key);
+                if (verified) {
+                    logMessage += `✓ SUCCESS: Equipped ${key} in ${slot}\n`;
+                    console.log(`Success: Equipped ${key}`);
+                    successCount++;
+                    success = true;
+                } else {
+                    logMessage += `⚠ Retry ${retries + 1}/3 for ${slot}: ${key} (verification failed)\n`;
+                    console.log(`Verification failed for ${key}, retrying...`);
+                    Utilities.sleep(1500);
+                    retries++;
+                }
+            } else {
+                if (retries < 2) {
+                    logMessage += `⚠ Retry ${retries + 1}/3 for ${slot}: ${key}\n`;
+                    console.log(`Retry attempt ${retries + 1} for ${key}`);
+                    Utilities.sleep(1500);
+                } else {
+                    logMessage += `✗ FAILED: ${slot} - ${key}\n`;
+                    logMessage += `  Error (${response.getResponseCode()}): ${response.getContentText()}\n`;
+                    console.log(`Failed (${response.getResponseCode()}): ${key}`);
+                    console.log(`Error: ${response.getContentText()}`);
+                    failCount++;
+                }
+                retries++;
+            }
         }
+
+        if (success) {
+            Utilities.sleep(800);
+        }
+    }
+
+    logMessage += `\n========================================\n`;
+    logMessage += `SUMMARY: ${successCount} equipped, ${failCount} failed\n`;
+    logMessage += `========================================\n`;
+
+    sendLogEmail(logMessage);
+    console.log(logMessage);
+
+    return { success: successCount, failed: failCount };
+}
+
+function verifyEquipment(slot, expectedKey) {
+    try {
+        const url = `${HABITICA_API_BASE}/user?userFields=items.gear.equipped`;
+        const params = {
+            headers: {
+                'x-api-user': USER_ID,
+                'x-api-key': API_TOKEN,
+                'x-client': USER_ID + '-GasVerifier'
+            },
+            muteHttpExceptions: true
+        };
+
+        const response = UrlFetchApp.fetch(url, params);
+        if (response.getResponseCode() === 200) {
+            const data = JSON.parse(response.getContentText());
+            const equippedKey = data.data.items.gear.equipped[slot];
+            return equippedKey === expectedKey;
+        }
+        return false;
+    } catch (e) {
+        console.log(`Verification error: ${e}`);
+        return false;
     }
 }
 
@@ -202,6 +289,7 @@ function testGearSwitch(buildName = "intelligence") {
     equipGearSafe(EQUIPMENT_SETS[buildName]);
     console.log("Test complete. Check Habitica avatar.");
 }
+
 
 function createBuildRewards() {
     const url = `${HABITICA_API_BASE}/tasks/user`;
