@@ -1,420 +1,365 @@
 // ==========================================
+
 // CONFIGURATION
+
 // ==========================================
+
+
+
+
 
 const USER_ID = "";
+
 const API_TOKEN = "";
+
 const WEB_APP_URL = "";
 
-const SEND_LOG_EMAIL = false;
-const EMAIL_ADDRESS = "";
+
 
 // Equipment sets for each build
-// Add more builds by adding new keys with their equipment
+
 const EQUIPMENT_SETS = {
+
     "intelligence": {
+
         "weapon": "weapon_special_mammothRiderSpear",
+
         "armor": "armor_special_2",
+
         "head": "head_special_2",
+
         "shield": "shield_special_diamondStave",
+
         "back": "back_special_aetherCloak",
+
         "eyewear": "eyewear_special_aetherMask",
+
         "body": "body_special_aetherAmulet"
+
     },
+
     "perception": {
+
         "weapon": "weapon_special_2",
+
         "armor": "armor_armoire_woodElfArmor",
+
         "head": "head_special_clandestineCowl",
+
         "shield": "shield_special_goldenknight",
+
         "back": "back_special_aetherCloak",
+
         "eyewear": "eyewear_special_aetherMask",
+
         "body": "body_special_aetherAmulet"
+
     },
+
     "constitution": {
+
         "weapon": "weapon_special_skeletonKey",
+
         "armor": "armor_special_2",
+
         "head": "head_special_roguishRainbowMessengerHood",
+
         "shield": "shield_special_moonpearlShield",
+
         "back": "back_special_aetherCloak",
+
         "eyewear": "eyewear_special_aetherMask",
+
         "body": "body_special_aetherAmulet"
+
     },
+
     "strength": {
+
         "weapon": "weapon_special_2",
+
         "armor": "armor_special_finnedOceanicArmor",
+
         "head": "head_special_2",
+
         "shield": "shield_special_lootBag",
+
         "back": "back_special_aetherCloak",
+
         "eyewear": "eyewear_special_aetherMask",
+
         "body": "body_special_aetherAmulet"
+
     }
+
 };
 
-const ROOT_URL = 'https://habitica.com/api/v3/user/equip/equipped/';
+
+
 const HABITICA_API_BASE = 'https://habitica.com/api/v3';
 
+const ROOT_URL = 'https://habitica.com/api/v3/user/equip/equipped/';
+
+
+
 // ==========================================
-// MAIN WEBHOOK LOGIC
+
+// MAIN WEBHOOK LOGIC (FASTEST VERSION)
+
 // ==========================================
+
+
 
 function doPost(e) {
-    let logMessage = "LOG START\n";
+
+    // 1. Validations
+
+    if (!e || !e.postData) return ContentService.createTextOutput("No data");
+
+
 
     try {
-        if (!e || !e.postData) {
-            logMessage += "Error: No postData received\n";
-            sendLogEmail(logMessage);
-            return;
-        }
 
-        let data;
-        try {
-            data = JSON.parse(e.postData.contents);
-        } catch (parseError) {
-            logMessage += `Error: Could not read webhook data. This usually means Habitica sent invalid data.\n`;
-            logMessage += `Technical details: ${parseError.toString()}\n`;
-            sendLogEmail(logMessage);
-            return ContentService.createTextOutput(JSON.stringify({ 
-                status: 'error', 
-                message: 'Invalid webhook data' 
-            }));
-        }
+        const data = JSON.parse(e.postData.contents);
+
         
-        logMessage += `Event Type: ${data.type}\n`;
+
+        // 2. Check if it's a reward event
 
         if (data.type === 'scored' && data.task && data.task.type === 'reward') {
+
             const rewardName = data.task.text.trim().toLowerCase();
-            logMessage += `Reward Name: '${data.task.text}'\n`;
 
-            let buildFound = false;
-            for (const [buildName, gearSet] of Object.entries(EQUIPMENT_SETS)) {
-                const expectedRewardName = `${buildName} build`;
+            
 
-                if (rewardName === expectedRewardName) {
-                    logMessage += `Match found: ${buildName}\n`;
-                    const result = equipGearSafe(gearSet);
-                    logMessage += `Gear switch completed: ${result.success} successful, ${result.failed} failed\n`;
-                    buildFound = true;
-                    break;
+            // 3. Find matching build
+
+            for (const buildName of Object.keys(EQUIPMENT_SETS)) {
+
+                if (rewardName === `${buildName} build`) {
+
+                    // 4. Run the optimized switcher
+
+                    equipGearFast(EQUIPMENT_SETS[buildName]);
+
+                    break; 
+
                 }
+
             }
 
-            if (!buildFound) {
-                logMessage += "No matching build found\n";
-            }
-        } else {
-            logMessage += "Ignored: Not a scored reward event\n";
         }
 
     } catch (error) {
-        logMessage += `Error: ${error.toString()}\n`;
+
+        console.error("Webhook Error: " + error.toString());
+
     }
 
-    sendLogEmail(logMessage);
+
+
+    // 5. Always return success fast
+
     return ContentService.createTextOutput(JSON.stringify({ status: 'success' }));
+
 }
 
 
-function sendLogEmail(body) {
-    if (!SEND_LOG_EMAIL) return;
-
-    try {
-        const emailTo = EMAIL_ADDRESS || Session.getActiveUser().getEmail();
-
-        MailApp.sendEmail({
-            to: emailTo,
-            subject: "Habitica Script Log",
-            body: body
-        });
-        console.log("Email sent to " + emailTo);
-    } catch (emailError) {
-        console.error("Failed to send email: " + emailError);
-        console.error("Email content was:");
-        console.error(body);
-        // At least they can check the execution log
-    }
-}
 
 // ==========================================
-// GEAR EQUIPMENT FUNCTION
+
+// CORE FUNCTION
+
 // ==========================================
 
-function equipGearSafe(gearList) {
-    let logMessage = "EQUIPMENT CHANGE LOG\n\n";
-    let successCount = 0;
-    let failCount = 0;
 
-    for (const [slot, key] of Object.entries(gearList)) {
-        if (!key || key === 'shield_base_0') {
-            logMessage += `⊘ Skipped ${slot} (empty or base shield)\n`;
-            console.log(`Skipping ${slot} (Key: ${key})`);
-            continue;
-        }
 
-        const specificUrl = ROOT_URL + key;
-        const params = {
-            method: 'post',
-            headers: {
-                'x-api-user': USER_ID,
-                'x-api-key': API_TOKEN,
-                'Content-Type': 'application/json',
-                'x-client': USER_ID + '-GasGearScript'
-            },
-            muteHttpExceptions: true
-        };
+function equipGearFast(targetGear) {
 
-        let retries = 0;
-        let success = false;
+    const headers = {
 
-        while (retries < 3 && !success) {
-            const response = UrlFetchApp.fetch(specificUrl, params);
+        'x-api-user': USER_ID,
 
-            if (response.getResponseCode() === 200) {
-                Utilities.sleep(1000);
+        'x-api-key': API_TOKEN,
 
-                const verified = verifyEquipment(slot, key);
-                if (verified) {
-                    logMessage += `✓ SUCCESS: Equipped ${key} in ${slot}\n`;
-                    console.log(`Success: Equipped ${key}`);
-                    successCount++;
-                    success = true;
-                } else {
-                    logMessage += `⚠ Retry ${retries + 1}/3 for ${slot}: ${key} (verification failed)\n`;
-                    console.log(`Verification failed for ${key}, retrying...`);
-                    Utilities.sleep(1500);
-                    retries++;
-                }
-            } else {
-                if (retries < 2) {
-                    logMessage += `⚠ Retry ${retries + 1}/3 for ${slot}: ${key}\n`;
-                    console.log(`Retry attempt ${retries + 1} for ${key}`);
-                    Utilities.sleep(1500);
-                } else {
-                    logMessage += `✗ FAILED: ${slot} - ${key}\n`;
-                    logMessage += `  Error (${response.getResponseCode()}): ${response.getContentText()}\n`;
-                    console.log(`Failed (${response.getResponseCode()}): ${key}`);
-                    console.log(`Error: ${response.getContentText()}`);
-                    failCount++;
-                }
-                retries++;
-            }
-        }
+        'x-client': USER_ID + '-GasFastScript'
 
-        if (success) {
-            Utilities.sleep(800);
-        }
-    }
+    };
 
-    logMessage += `\n========================================\n`;
-    logMessage += `SUMMARY: ${successCount} equipped, ${failCount} failed\n`;
-    logMessage += `========================================\n`;
 
-    sendLogEmail(logMessage);
-    console.log(logMessage);
 
-    return { success: successCount, failed: failCount };
-}
+    // STEP 1: Get Current Gear
 
-function verifyEquipment(slot, expectedKey) {
+    // Essential to prevent "unequipping" items you are already wearing
+
+    let currentGear = {};
+
     try {
+
+        // Only fetch the specific field we need (saves bandwidth/time)
+
         const url = `${HABITICA_API_BASE}/user?userFields=items.gear.equipped`;
-        const params = {
-            headers: {
-                'x-api-user': USER_ID,
-                'x-api-key': API_TOKEN,
-                'x-client': USER_ID + '-GasVerifier'
-            },
-            muteHttpExceptions: true
-        };
 
-        const response = UrlFetchApp.fetch(url, params);
-        if (response.getResponseCode() === 200) {
-            const data = JSON.parse(response.getContentText());
-            const equippedKey = data.data.items.gear.equipped[slot];
-            return equippedKey === expectedKey;
-        }
-        return false;
+        const resp = UrlFetchApp.fetch(url, { headers: headers });
+
+        currentGear = JSON.parse(resp.getContentText()).data.items.gear.equipped;
+
     } catch (e) {
-        console.log(`Verification error: ${e}`);
-        return false;
+
+        console.error("Failed to fetch gear. Aborting safely.");
+
+        return;
+
     }
+
+
+
+    // STEP 2: Calculate Differences
+
+    let requests = [];
+
+    for (const [slot, targetKey] of Object.entries(targetGear)) {
+
+        // Skip if:
+
+        // A) The target is empty
+
+        // B) The target is the base/empty shield
+
+        // C) We are ALREADY wearing this exact item (prevents toggle/unequip)
+
+        if (!targetKey || targetKey === 'shield_base_0' || currentGear[slot] === targetKey) {
+
+            continue;
+
+        }
+
+
+
+        requests.push({
+
+            url: `${ROOT_URL}${targetKey}`,
+
+            method: 'post',
+
+            headers: headers,
+
+            muteHttpExceptions: true
+
+        });
+
+    }
+
+
+
+    // STEP 3: Fire Requests (Parallel)
+
+    if (requests.length > 0) {
+
+        console.log(`Updating ${requests.length} items...`);
+
+        // fetchAll sends all requests at the exact same time
+
+        UrlFetchApp.fetchAll(requests);
+
+        console.log("Update complete.");
+
+    } else {
+
+        console.log("Gear is already correct.");
+
+    }
+
 }
 
-// ==========================================
-// UTILITY FUNCTIONS
+
+
 // ==========================================
 
-/**
- * Run this FIRST to validate your configuration
- * Check the execution log for any errors
- */
-function validateSetup() {
-    let errors = [];
-    let warnings = [];
-    
-    // Check credentials
-    if (!USER_ID || USER_ID === "") {
-        errors.push("❌ USER_ID is empty");
-    }
-    if (!API_TOKEN || API_TOKEN === "") {
-        errors.push("❌ API_TOKEN is empty");
-    }
-    if (!WEB_APP_URL || WEB_APP_URL === "") {
-        warnings.push("⚠️ WEB_APP_URL is empty (fill this after deployment)");
-    }
-    
-    // Check email settings
-    if (SEND_LOG_EMAIL && !EMAIL_ADDRESS) {
-        warnings.push("⚠️ Email logging enabled but no EMAIL_ADDRESS set (will use your Google account)");
-    }
-    
-    // Check equipment sets
-    if (Object.keys(EQUIPMENT_SETS).length === 0) {
-        errors.push("❌ EQUIPMENT_SETS is empty");
-    }
-    
-    // Test API connection if credentials exist
-    if (USER_ID && API_TOKEN) {
-        try {
-            const url = `${HABITICA_API_BASE}/user?userFields=_id`;
-            const params = {
-                headers: {
-                    'x-api-user': USER_ID,
-                    'x-api-key': API_TOKEN,
-                    'x-client': USER_ID + '-GasValidator'
-                },
-                muteHttpExceptions: true
-            };
-            const response = UrlFetchApp.fetch(url, params);
-            if (response.getResponseCode() === 200) {
-                console.log("✅ API credentials are valid!");
-            } else {
-                errors.push(`❌ API credentials invalid (Status: ${response.getResponseCode()})`);
-            }
-        } catch (e) {
-            errors.push(`❌ Could not connect to Habitica: ${e}`);
-        }
-    }
-    
-    // Print results
-    if (errors.length > 0) {
-        console.error("SETUP ERRORS - Fix these before continuing:");
-        errors.forEach(err => console.error(err));
-    }
-    
-    if (warnings.length > 0) {
-        console.warn("WARNINGS:");
-        warnings.forEach(warn => console.warn(warn));
-    }
-    
-    if (errors.length === 0) {
-        console.log("✅ Setup validation passed!");
-        if (warnings.length === 0) {
-            console.log("You're ready to deploy!");
-        }
-    }
-}
+// SETUP TOOLS (Run manually if needed)
+
+// ==========================================
+
+
 
 function setupWebhook() {
-    if (WEB_APP_URL.includes("/dev")) {
-        console.error("Error: Use '/exec' URL from Manage Deployments, not '/dev'");
+
+    if (!WEB_APP_URL || WEB_APP_URL.includes("/dev")) {
+
+        console.error("Error: set WEB_APP_URL to your '/exec' URL first.");
+
         return;
+
     }
+
+
 
     const url = `${HABITICA_API_BASE}/user/webhook`;
+
     const payload = {
+
         url: WEB_APP_URL,
-        label: "Gear Switcher Script",
+
+        label: "Fast Gear Switcher",
+
         type: "taskActivity",
+
         options: { scored: true }
+
     };
 
+
+
     const params = {
+
         method: 'post',
+
         headers: {
+
             'x-api-user': USER_ID,
+
             'x-api-key': API_TOKEN,
+
             'Content-Type': 'application/json',
+
             'x-client': USER_ID + '-GasSetup'
+
         },
+
         payload: JSON.stringify(payload)
+
     };
+
+
 
     try {
+
         const resp = UrlFetchApp.fetch(url, params);
+
         console.log("Webhook Connected! Status: " + resp.getResponseCode());
-        console.log("Habitica is now sending data to: " + WEB_APP_URL);
+
     } catch (e) {
+
         console.error("Error connecting webhook: " + e);
+
     }
+
 }
 
+
+
 function getMyGearKeys() {
+
     const url = `${HABITICA_API_BASE}/user?userFields=items.gear.equipped`;
+
     const params = {
-        headers: {
-            'x-api-user': USER_ID,
-            'x-api-key': API_TOKEN,
-            'x-client': USER_ID + '-GasKeyFinder'
-        }
+
+        headers: { 'x-api-user': USER_ID, 'x-api-key': API_TOKEN }
+
     };
 
     const response = JSON.parse(UrlFetchApp.fetch(url, params).getContentText());
-    console.log("Copy this into your EQUIPMENT_SETS:");
+
     console.log(JSON.stringify(response.data.items.gear.equipped, null, 2));
-}
 
-function testEmail() {
-    sendLogEmail("Test email to verify permissions");
-}
-
-function testGearSwitch(buildName = "intelligence") {
-    console.log(`Testing gear switch for: ${buildName}`);
-
-    if (!EQUIPMENT_SETS[buildName]) {
-        console.error(`Build '${buildName}' not found`);
-        return;
-    }
-
-    equipGearSafe(EQUIPMENT_SETS[buildName]);
-    console.log("Test complete. Check Habitica avatar.");
-}
-
-
-function createBuildRewards() {
-    const url = `${HABITICA_API_BASE}/tasks/user`;
-
-    for (const buildName of Object.keys(EQUIPMENT_SETS)) {
-        const rewardData = {
-            text: `${buildName} build`,
-            type: "reward",
-            value: 0,
-            notes: `equips gears that have most ${buildName}`
-        };
-
-        const params = {
-            method: 'post',
-            headers: {
-                'x-api-user': USER_ID,
-                'x-api-key': API_TOKEN,
-                'Content-Type': 'application/json',
-                'x-client': USER_ID + '-GasRewardCreator'
-            },
-            payload: JSON.stringify(rewardData),
-            muteHttpExceptions: true
-        };
-
-        try {
-            const response = UrlFetchApp.fetch(url, params);
-            if (response.getResponseCode() === 201) {
-                console.log(`Created reward: ${buildName} build`);
-            } else {
-                console.error(`Failed to create ${buildName} build: ${response.getContentText()}`);
-            }
-        } catch (e) {
-            console.error(`Error creating ${buildName} build: ${e}`);
-        }
-    }
-
-    console.log("Reward creation complete!");
 }
